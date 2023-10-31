@@ -1,0 +1,161 @@
+Steps to create topic via commandline : (assumed zookeeper running on port 2181 and kafka server on 9092)
+
+Get inside the kafka pod by using this command
+kubectl exec -it kafka-pod-name -- /bin/bash
+
+Create the topic by using below command
+kafka-topics --bootstrap-server localhost:9092 --create --topic topic-name --replication-factor 1 --partitions 3
+
+you can verify the message produce and consume using below commands-
+a) produce-->
+
+kafka-console-producer --broker-list localhost:9092 --topic <topic-you-created-before>
+provide some message
+b) consume--> kafka-console-consumer --bootstrap-server localhost:9092 --topic audit --from-beginning
+
+you can see the message(provided by producer) here
+
+
+kafka-topics.sh --bootstrap-server localhost:9092 --list    show all topic kafka
+kafka-topics.sh --bootstrap-server localhost:9092 --describe shot-worker-stats-0     show describe topic
+_______________________________________________________________________________________________________________
+
+To help with debugging, enable TRACE level logging for metadata migration. Add the following line to the log4j.properties file found in the /opt/bitnami/kafka/config  (/etc/kafka/) directory:
+
+log4j.logger.org.apache.kafka.metadata.migration=TRACE
+______________________________________________________________________________________________________________________________________________________________________________________
+Retrieve the cluster ID
+/opt/bitnami/kafka$ ./bin/zookeeper-shell.sh b2g-zookeeper:2181
+get /cluster/id
+{"version":"1","id":"qGpDJ1qVT7mf7ihXPlBZQg"}
+_____________________________________________________________________________________________________________________________________________________________________________________
+Configure and provision a KRaft controller quorum
+Deploy a set of KRaft controllers that will take over from ZooKeeper. Configure and start each of the KRaft controllers with the following:
+
+A node.id that is unique across all brokers and controllers
+Migration enabled with zookeeper.metadata.migration.enable=true
+ZooKeeper connection configuration
+Other KRaft-mode required properties, such as controller.quorum.voters, and controller.listener.names
+Following is an example controller.properties file, for a controller listening on port 9093:
+
+process.roles=controller
+node.id=3000
+controller.quorum.voters=3000@localhost:9093
+controller.listener.names=CONTROLLER
+listeners=CONTROLLER://:9093
+
+# Enable the migration
+  zookeeper.metadata.migration.enable=true
+
+# ZooKeeper client configuration
+  zookeeper.connect=localhost:2181
+
+______________________________________________________________________________________________________________________________________________________________________________________________
+Step 3: Format storage with the ID you saved previously
+Format storage with the ID and the controller configuration file. For example:
+
+./bin/kafka-storage format --config ./etc/kafka/kraft/controller.properties --cluster-id WZEKwK-bS62oT3ZOSU0dgw
+You might see output like the following:
+
+Formatting /tmp/kraft-controller-logs with metadata version 3.5-IV0
+_____________________________________________________________________________________________________________________________________________________________________________________________
+Step 4: Enable migration on the brokers
+Once the KRaft controllers are started, you will reconfigure each broker for KRaft migration and restart the broker. You can do a rolling restart to help ensure cluster availability during the migration. Metadata migration automatically starts when all of the brokers have been restarted.
+
+You need to set the following configuration properties:
+
+inter.broker.protocol.version to version 3.5
+Migration enabled with zookeeper.metadata.migration.enable=true
+ZooKeeper connection configuration
+Other KRaft-mode required properties, such as controller.quorum.voters and controller.listener.names
+Following is an example configuration file for a broker that is ready for the KRaft migration.
+
+broker.id=0
+listeners=PLAINTEXT://:9092
+advertised.listeners=PLAINTEXT://localhost:9092
+listener.security.protocol.map=PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+
+# Set the IBP
+  inter.broker.protocol.version=3.5
+
+# Enable the migration
+  zookeeper.metadata.migration.enable=true
+
+# ZooKeeper client configuration
+  zookeeper.connect=localhost:2181
+
+# KRaft controller quorum configuration
+  controller.quorum.voters=3000@localhost:9093
+  controller.listener.names=CONTROLLER
+When all of the Kafka brokers running with ZooKeeper for metadata management are restarted with migration properties set, the migration automatically begins. When migration is complete, you should see the following entry in a log at INFO level.
+
+Completed migration of metadata from Zookeeper to KRaft.
+___________________________________________________________________________________________________________________________________________________________________________________________________
+Step 5: Migrate the brokers
+At this point, the metatdata migration should be complete, but the brokers are still running in ZooKeeper mode.
+
+The KRaft controller is running in migration mode, and it will send controller remote procedure calls (RPCs) such as UpdateMetadata and LeaderAndIsr to the ZooKeeper-mode brokers.
+
+To migrate the brokers to KRaft, you need to reconfigure them as KRaft brokers and restart them.
+
+Using the migration broker configuration as an example, replace the broker.id with node.id (maintaining the same identifier) and add process.roles=broker, which signals KRaft mode.
+
+Remove the ZooKeeper configuration entries, and then restart the broker. Following is an example of how a server.properties file for a migrated broker might look.
+
+process.roles=broker
+node.id=0
+listeners=PLAINTEXT://:9092
+advertised.listeners=PLAINTEXT://localhost:9092
+listener.security.protocol.map=PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+
+# Remove the IBP, KRaft uses "metadata.version" feature flag
+# inter.broker.protocol.version=3.5
+
+# Remove the migration enabled flag
+# zookeeper.metadata.migration.enable=true
+
+# Remove ZooKeeper client configuration
+# zookeeper.connect=localhost:2181
+
+# Keep the KRaft controller quorum configuration
+  controller.quorum.voters=3000@localhost:9093
+  controller.listener.names=CONTROLLER
+When you have finished updating the configuration and restarting each broker, the cluster is running in KRaft mode.
+______________________________________________________________________________________________________________________________________________________________________________
+
+Step 6: Take KRaft controllers out of migration mode
+The final step of the migration is to remove the zookeeper.metadata.migration.enable property to take the controllers out of migration mode, and to remove the ZooKeeper configuration entry. Following is an example controller.properties file for a controller that is migrated to KRaft mode and is listening on port 9093.
+
+process.roles=controller
+node.id=3000
+controller.quorum.voters=1@localhost:9093
+controller.listener.names=CONTROLLER
+listeners=CONTROLLER://:9093
+
+# Disable migration.
+  zookeeper.metadata.migration.enable=true
+
+# Remove ZooKeeper client configuration.
+  zookeeper.connect=localhost:2181
+After this step, restart each controller and your cluster should be migrated to KRaft mode.
+______________________________________________________________________________________________________________________________________________________________________________
+
+
+
+Another way is to use the KafkaTopic resource:
+
+kubectl apply -f - <<EOF
+apiVersion: kafka.strimzi.io/v1beta1
+kind: KafkaTopic
+metadata:
+  name: my-new-topic
+  labels:
+    strimzi.io/cluster: my-cluster
+spec:
+  replicas: 3
+  partitions: 10
+EOF
+kubectl get kafkatopics.kafka.strimzi.io
+
+NAME           CLUSTER      PARTITIONS   REPLICATION FACTOR
+my-new-topic   my-cluster   10           3
