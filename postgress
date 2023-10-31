@@ -1,0 +1,37 @@
+Reproduce issue
+Here is an example illustrating the issue:
+
+Install a chart that uses a stateful application, such as the Bitnami PostgreSQL chart:
+
+helm install MY-RELEASE oci://registry-1.docker.io/bitnamicharts/postgresql
+Since no credentials were specified and no existing Secrets are being reused, a random alphanumeric password is generated for the postgres (admin) user of the database. This password is also used by readiness and liveness probes on PostgreSQL pods. Obtain the generated password using the commands below:
+
+export POSTGRES_PASSWORD=$(kubectl get secret --namespace default MY-RELEASE-postgresql -o jsonpath="{.data.postgresql-password}" | base64 --decode)
+echo $POSTGRES_PASSWORD
+  8aQdvrEhr5
+Verify the password by logging in to the PostgreSQL server using this password:
+
+kubectl run postgresql-client --rm --tty -i --restart='Never' --namespace default --image bitnami/postgresql:latest --env="PGPASSWORD=$POSTGRES_PASSWORD" --command -- psql --host MY-RELEASE-postgresql -U postgres -d postgres -p 5432
+  ...
+  postgres=#
+Upgrade the chart release:
+
+helm upgrade MY-RELEASE oci://registry-1.docker.io/bitnamicharts/postgresql
+Obtain the password again. You will find that a new password has been generated, as shown in the example below:
+
+export POSTGRES_PASSWORD=$(kubectl get secret --namespace default MY-RELEASE-postgresql -o jsonpath="{.data.postgresql-password}" | base64 --decode)
+echo $POSTGRES_PASSWORD
+  7C91EMpVDH
+Try to log in to PostgreSQL using the new password:
+
+kubectl run postgresql-client --rm --tty -i --restart='Never' --namespace default --image bitnami/postgresql:latest --env="PGPASSWORD=$POSTGRES_PASSWORD" --command -- psql --host MY-RELEASE-postgresql -U postgres -d postgres -p 5432
+  psql: FATAL:  password authentication failed for user "postgres"
+As can be seen above, the credentials available in the Secret are no longer valid to access PostgreSQL after upgrading.
+
+The reason for this behaviour lies in how Bitnami containers/charts work:
+
+Bitnami containers configure/initialize applications the first time they are deployed. However, they skip this configuration/initialization step and reuse persisted data if detected on subsequent deployments or upgrades.
+Bitnami charts packaging stateful apps enable persistence by default using Persistent Volume Claims (PVCs).
+Therefore, even if the containers are forcefully restarted after upgrading the chart, they will continue to reuse the persistent data that was created when the chart was first deployed. As a result, the persistent data and the Secret go out-of-sync with each other.
+
+NOTE: Some validations have been recently added to some charts to warn users when trying to upgrade without specifying credentials.
