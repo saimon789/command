@@ -1,0 +1,21 @@
+kubectl get nodes
+
+kubectl get pods -o wide
+
+1
+kubectl cordon kworker-rj2
+
+kubectl get nodes
+check node помечен как SchedulingDisabled.
+
+2
+kubectl drain kworker-rj2 --grace-period=300 --ignore-daemonsets=true
+
+kubectl get pods -o wide
+
+kubectl get nodes
+
+
+3
+kubectl uncordon kworker-rj2
+kubectl get nodes
